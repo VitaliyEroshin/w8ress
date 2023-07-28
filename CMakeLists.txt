@@ -4,5 +4,15 @@ project (
     w8ress
 )
 
+# Compilation settings
+set(CMAKE_CXX_STANDARD 23)
+add_compile_options(-Wall -Wextra -Wpedantic -Werror)  # I'm fine
+
+# Some sanitizers
+add_compile_options(-fsanitize=address)
+add_link_options(-fsanitize=address)
+
 set(SRC_DIR ${PROJECT_SOURCE_DIR}/src)
 add_executable(w8ress ${SRC_DIR}/main.cpp)
+
+target_include_directories(w8ress PUBLIC ${SRC_DIR})
