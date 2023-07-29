@@ -1,3 +1,5 @@
+#include <bits/types/sig_atomic_t.h>
+#include <csignal>
 #include <optional>
 #include <set>
 #include <string>
@@ -13,6 +15,10 @@ struct ServerSettings {
 class HttpServer {
 public:
     void Setup(int port);
+    void CheckEvents();
+    void Terminate();
+
+    ~HttpServer();
 
 private:
     using EpollEvent = epoll_event;
@@ -26,7 +32,9 @@ private:
     void ReadSocket(int fd);
     void DisconnectSocket(int fd);
     void ParseHttpRequest(std::string data);
+    void ParseFilesystemPath(std::string path);
 
+    volatile sig_atomic_t running{true};
     int socket;
     int epoll;
     EpollEvent epoll_events[SOMAXCONN];
@@ -37,10 +45,12 @@ class Server {
 public:
     Server(ServerSettings);
     void Listen();
+    void Terminate();
 
 private:
     void SetupHttpListener(int port);
 
+    volatile std::sig_atomic_t running{true};
     ServerSettings settings;
     HttpServer http;
 };

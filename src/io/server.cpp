@@ -15,6 +15,28 @@ Server::Server(ServerSettings settings): settings(std::move(settings)) {
     }
 }
 
+void Server::Listen() {
+    while (running) {
+        if (settings.http_port) {
+            http.CheckEvents();
+        }
+    }
+}
+
+void Server::Terminate() {
+    http.Terminate();
+    running = false;
+}
+
+void HttpServer::Terminate() {
+    running = false;
+}
+
+HttpServer::~HttpServer() {
+    shutdown(socket, SHUT_RDWR);
+    close(socket);
+}
+
 namespace detail {
 
 int MakeSocket(int port) {
@@ -45,26 +67,31 @@ void HttpServer::Setup(int port) {
     socket = detail::MakeSocket(port);
 
     epoll = epoll_create1(0);
-    epoll_event listen_event;
-    EpollEventData listen_data = {socket};
+    
+    epoll_data[socket] = {socket};
+    epoll_events[socket].data.ptr = &epoll_data[socket];
+    epoll_events[socket].events = EPOLLIN;
 
-    listen_event.data.ptr = &listen_data;
-    listen_event.events = EPOLLIN;
+    epoll_ctl(epoll, EPOLL_CTL_ADD, socket, &epoll_events[socket]);
 
-    epoll_ctl(epoll, EPOLL_CTL_ADD, socket, &listen_event);
+    std::cout << "HTTP server is up and ready UwU! Go grab some cup of coffee" << std::endl;
+}
 
+void HttpServer::CheckEvents() {
     const size_t max_events = SOMAXCONN;
-    epoll_event events[max_events];
 
-    while (true) {
-        size_t trigerred = epoll_wait(epoll, events, max_events, -1);
+    // Threadlocal?
+    static epoll_event events[max_events];
 
-        for (size_t i = 0; i < trigerred; ++i) {
-            ProcessEpollEvent(&events[i]);
-        }
+    ssize_t triggered = epoll_wait(epoll, events, max_events, -1);
+
+    if (triggered < 0 && running) {
+        perror("Epoll error");
     }
 
-    shutdown(socket, SHUT_RDWR);
+    for (ssize_t i = 0; i < triggered; ++i) {
+        ProcessEpollEvent(&events[i]);
+    }
 }
 
 void HttpServer::ProcessEpollEvent(epoll_event* event) {
@@ -148,4 +175,9 @@ void HttpServer::ParseHttpRequest(std::string data) {
     ss >> proto;
     std::cout << "Proto: " << proto << std::endl;
     std::cout << "Requested path: " << path << std::endl;
+    ParseFilesystemPath(std::move(path));
+}
+
+void HttpServer::ParseFilesystemPath(std::string /*path*/) {
+
 }
