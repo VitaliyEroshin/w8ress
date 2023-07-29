@@ -2,5 +2,6 @@
 #include <iostream>
 
 int main() {
-    Server(ServerSettings());
+    Server server(ServerSettings{});
+    
 }

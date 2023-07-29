@@ -1,4 +1,7 @@
 #include <optional>
+#include <set>
+#include <sys/epoll.h>
+#include <sys/socket.h>
 
 struct ServerSettings {
     /* Protocol ports. std::nullopt if you want to disable specific protocol */
@@ -8,11 +11,25 @@ struct ServerSettings {
 
 class HttpServer {
 public:
-    HttpServer();
     void Setup(int port);
 
 private:
+    struct Connection {
+        epoll_event event;
+    };
+
+    struct EpollEventData {
+        int fd;
+        Connection* connection = nullptr;
+    };
+
+    void ProcessEpollEvent(EpollEventData data);
+    void AcceptNewConnection();
+
     int socket;
+    int epoll;
+    EpollEventData epoll_data[SOMAXCONN];
+    Connection connections[SOMAXCONN];
 };
 
 class Server {
