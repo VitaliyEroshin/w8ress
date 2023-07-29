@@ -4,6 +4,7 @@
 #include <io/server.hpp>
 #include <iostream>
 #include <sstream>
+#include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -60,6 +61,28 @@ int MakeSocket(int port) {
 
     return socket;
 }
+
+struct HttpResponse {
+    std::string proto;
+    int status_code;
+    std::string reason_phrase;
+    std::string content_type;
+    int content_length;
+    std::string content;
+
+    std::string GetResponse() {
+        std::string response;
+        response += proto + " ";
+        response += std::to_string(status_code) + " ";
+        response += reason_phrase + "\n";
+        response += "Content-Type: " + content_type + "\n";
+        response += "Content-Length: " + std::to_string(content_length) + "\n";
+        response += "\n";
+        response += content;
+
+        return response;
+    }
+};
 
 }; // namespace detail
 
