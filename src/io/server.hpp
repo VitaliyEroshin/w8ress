@@ -1,5 +1,6 @@
 #include <optional>
 #include <set>
+#include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 
@@ -14,22 +15,22 @@ public:
     void Setup(int port);
 
 private:
-    struct Connection {
-        epoll_event event;
-    };
+    using EpollEvent = epoll_event;
 
     struct EpollEventData {
         int fd;
-        Connection* connection = nullptr;
     };
 
-    void ProcessEpollEvent(EpollEventData data);
+    void ProcessEpollEvent(EpollEvent* data);
     void AcceptNewConnection();
+    void ReadSocket(int fd);
+    void DisconnectSocket(int fd);
+    void ParseHttpRequest(std::string data);
 
     int socket;
     int epoll;
+    EpollEvent epoll_events[SOMAXCONN];
     EpollEventData epoll_data[SOMAXCONN];
-    Connection connections[SOMAXCONN];
 };
 
 class Server {

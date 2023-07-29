@@ -3,8 +3,11 @@
 #include <fcntl.h>
 #include <io/server.hpp>
 #include <iostream>
+#include <sstream>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 Server::Server(ServerSettings settings): settings(std::move(settings)) {
     if (settings.http_port) {
@@ -53,28 +56,31 @@ void HttpServer::Setup(int port) {
     const size_t max_events = SOMAXCONN;
     epoll_event events[max_events];
 
-    std::cout << "Socket fd: " << socket << std::endl;
-
     while (true) {
         size_t trigerred = epoll_wait(epoll, events, max_events, -1);
 
-        std::cout << "Triggered " << trigerred << " events" << std::endl;
-
         for (size_t i = 0; i < trigerred; ++i) {
-            EpollEventData* data = reinterpret_cast<EpollEventData*>(events[i].data.ptr);
-
-            ProcessEpollEvent(*data);
+            ProcessEpollEvent(&events[i]);
         }
     }
 
     shutdown(socket, SHUT_RDWR);
 }
 
-void HttpServer::ProcessEpollEvent(EpollEventData data) {
-    if (data.fd == socket) {
-        AcceptNewConnection();
+void HttpServer::ProcessEpollEvent(epoll_event* event) {
+    EpollEventData* data = reinterpret_cast<EpollEventData*>(event->data.ptr);
+
+    if ((event->events & EPOLLHUP) != 0) {
+        DisconnectSocket(data->fd);
+        return;
     }
-    std::cout << data.fd << std::endl;
+    
+    if (data->fd == socket) {
+        AcceptNewConnection();
+        return;
+    }
+
+    ReadSocket(data->fd);
     return;
 }
 
@@ -83,15 +89,63 @@ void HttpServer::AcceptNewConnection() {
 
     fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
 
-    auto& con = connections[fd];
-    auto& data = epoll_data[fd];
+    epoll_data[fd].fd = fd;
+    epoll_events[fd].data.ptr = &epoll_data[fd];
+    epoll_events[fd].events = EPOLLIN | EPOLLRDHUP;
 
-    con.event.data.ptr = &data;
-    con.event.data.fd = fd;
-    data.fd = fd;
-    data.connection = &con;
-    con.event.events = EPOLLIN;
-
-    epoll_ctl(epoll, EPOLL_CTL_ADD, fd, &con.event);
+    epoll_ctl(epoll, EPOLL_CTL_ADD, fd, &epoll_events[fd]);
     return;
+}
+
+void HttpServer::ReadSocket(int fd) {
+    // Need to be threadlocal here? Though everything should be thread-safe.
+    
+    const size_t buffer_size = 4096;
+    char buff[buffer_size];
+
+    // Some flags?
+    int bytes_read = recv(fd, buff, buffer_size, 0);
+
+    if (bytes_read == 0) {
+        DisconnectSocket(fd);
+        return;
+    }
+
+    if (bytes_read < 0) {
+        // TODO: Gentle error handling
+        DisconnectSocket(fd);
+        return;
+    }
+
+    std::string buffer(buff);
+    ParseHttpRequest(std::move(buffer));
+}
+
+void HttpServer::DisconnectSocket(int fd) {
+    std::cout <<  "Disconnection on " << fd << " socket" << std::endl;
+    shutdown(fd, SHUT_RDWR);
+    close(fd);
+}
+
+void HttpServer::ParseHttpRequest(std::string data) {
+    std::string copy = data;
+
+    std::stringstream ss(std::move(data));
+
+    std::string request;
+    ss >> request;
+
+    if (request != "GET") {
+        std::cout << "Unknown request type " << request << std::endl;
+        std::cout << copy;
+        return;
+    }
+
+    std::string path;
+    ss >> path;
+
+    std::string proto;
+    ss >> proto;
+    std::cout << "Proto: " << proto << std::endl;
+    std::cout << "Requested path: " << path << std::endl;
 }
