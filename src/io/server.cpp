@@ -67,22 +67,116 @@ struct HttpResponse {
     int status_code;
     std::string reason_phrase;
     std::string content_type;
-    int content_length;
+    std::optional<int> content_length;
     std::string content;
 
     std::string GetResponse() {
         std::string response;
+
         response += proto + " ";
         response += std::to_string(status_code) + " ";
         response += reason_phrase + "\n";
-        response += "Content-Type: " + content_type + "\n";
-        response += "Content-Length: " + std::to_string(content_length) + "\n";
+        if (!content_type.empty()) {
+            response += "Content-Type: " + content_type + "\n";
+        }
+
+        if (content_length) {
+            response += "Content-Length: " + std::to_string(content_length.value()) + "\n";
+        }
+
         response += "\n";
-        response += content;
+        
+        if (!content.empty()) {
+            response += content;
+        }
 
         return response;
     }
 };
+
+void ExecuteScript(int client, const char* path) {
+    pid_t child_pid = fork();
+
+    if (child_pid == 0) {
+        dup2(client, 1);
+        execlp(path, path, NULL);
+        perror("execlp failed");
+        exit(1);
+    }
+
+    waitpid(child_pid, NULL, 0);
+}
+
+void RedirectFileContent(int client, int desc, int length) {
+    const int max_buffer_size = 4096;
+    char buffer[max_buffer_size];
+
+    char* content = mmap(NULL, length, PROT_READ, MAP_PRIVATE, desc, 0);
+
+    for (int i = 0; i < length;) {
+        int to_copy =
+            (length - i < max_buffer_size ? length - i : max_buffer_size);
+        memcpy(buffer, content + i, to_copy);
+        write(client, buffer, to_copy);
+        i += to_copy;
+    }
+
+    munmap(content, length);
+}
+
+void Respond(HttpResponse response, int fd) {
+    std::string data = response.GetResponse();
+    write(fd, data.c_str(), data.length());
+}
+
+void ResolveStaticContent(std::string path, int fd) {
+    HttpResponse response;
+    response.proto = "HTTP/1.1";
+
+    int desc = open(path.c_str(), O_RDONLY);
+    if (desc < 0) {
+        if (errno == ENOENT) {
+            response.status_code = 404;
+            response.reason_phrase = "Not Found";
+            response.content_length = 0;
+
+            Respond(std::move(response), fd);
+            return;
+        }
+
+        if (errno == EACCES) {
+            response.status_code = 403;
+            response.reason_phrase = "Forbidden";
+            response.content_length = 0;
+
+            Respond(std::move(response), fd);
+            return;
+        }
+
+        return;
+    }
+
+    struct stat file_stat;
+
+    fstat(desc, &file_stat);
+    int length = file_stat.st_size;
+
+    response.status_code = 200;
+    response.reason_phrase = "OK";
+
+    if ((S_IXUSR & file_stat.st_mode) != 0) {
+        Respond(std::move(response), fd);
+
+        ExecuteScript(fd, path.c_str());
+    } else {
+        response.content_length = length;
+        Respond(std::move(response), fd);
+
+        RedirectFileContent(fd, desc, length);
+    }
+
+    close(desc);
+}
 
 }; // namespace detail
 
@@ -198,9 +292,9 @@ void HttpServer::ParseHttpRequest(std::string data) {
     ss >> proto;
     std::cout << "Proto: " << proto << std::endl;
     std::cout << "Requested path: " << path << std::endl;
-    ParseFilesystemPath(std::move(path));
+    path = ParseFilesystemPath(std::move(path));
 }
 
-void HttpServer::ParseFilesystemPath(std::string /*path*/) {
-
+void HttpServer::ParseFilesystemPath(std::string path) {
+    return path;
 }
