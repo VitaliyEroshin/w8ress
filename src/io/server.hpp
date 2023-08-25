@@ -31,8 +31,8 @@ private:
     void AcceptNewConnection();
     void ReadSocket(int fd);
     void DisconnectSocket(int fd);
-    void ParseHttpRequest(std::string data);
-    void ParseFilesystemPath(std::string path);
+    void ParseHttpRequest(std::string data, int fd);
+    std::string ParseFilesystemPath(std::string path);
 
     volatile sig_atomic_t running{true};
     int socket;

@@ -9,6 +9,10 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sys/wait.h>
+#include <sys/mman.h>
+#include <string.h>
+#include <sys/stat.h>
 
 Server::Server(ServerSettings settings): settings(std::move(settings)) {
     if (settings.http_port) {
@@ -111,7 +115,7 @@ void RedirectFileContent(int client, int desc, int length) {
     const int max_buffer_size = 4096;
     char buffer[max_buffer_size];
 
-    char* content = mmap(NULL, length, PROT_READ, MAP_PRIVATE, desc, 0);
+    char* content = reinterpret_cast<char*>(mmap(NULL, length, PROT_READ, MAP_PRIVATE, desc, 0));
 
     for (int i = 0; i < length;) {
         int to_copy =
@@ -126,6 +130,7 @@ void RedirectFileContent(int client, int desc, int length) {
 
 void Respond(HttpResponse response, int fd) {
     std::string data = response.GetResponse();
+    std::cout << "Responding: " << data << std::endl;
     write(fd, data.c_str(), data.length());
 }
 
@@ -262,7 +267,7 @@ void HttpServer::ReadSocket(int fd) {
     }
 
     std::string buffer(buff);
-    ParseHttpRequest(std::move(buffer));
+    ParseHttpRequest(std::move(buffer), fd);
 }
 
 void HttpServer::DisconnectSocket(int fd) {
@@ -271,7 +276,7 @@ void HttpServer::DisconnectSocket(int fd) {
     close(fd);
 }
 
-void HttpServer::ParseHttpRequest(std::string data) {
+void HttpServer::ParseHttpRequest(std::string data, int fd) {
     std::string copy = data;
 
     std::stringstream ss(std::move(data));
@@ -293,8 +298,10 @@ void HttpServer::ParseHttpRequest(std::string data) {
     std::cout << "Proto: " << proto << std::endl;
     std::cout << "Requested path: " << path << std::endl;
     path = ParseFilesystemPath(std::move(path));
+
+    detail::ResolveStaticContent(path, fd);
 }
 
-void HttpServer::ParseFilesystemPath(std::string path) {
+std::string HttpServer::ParseFilesystemPath(std::string path) {
     return path;
 }
