@@ -13,9 +13,11 @@
 #include <sys/mman.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <vector>
 
-Server::Server(ServerSettings settings): settings(std::move(settings)) {
+Server::Server(ServerSettings settings): settings(settings) {
     if (settings.http_port) {
+        http.ApplySettings(settings);
         http.Setup(settings.http_port.value());
     }
 }
@@ -185,6 +187,10 @@ void ResolveStaticContent(std::string path, int fd) {
 
 }; // namespace detail
 
+void HttpServer::ApplySettings(ServerSettings s) {
+    settings = s;
+}
+
 void HttpServer::Setup(int port) {
     socket = detail::MakeSocket(port);
 
@@ -296,12 +302,92 @@ void HttpServer::ParseHttpRequest(std::string data, int fd) {
     std::string proto;
     ss >> proto;
     std::cout << "Proto: " << proto << std::endl;
-    std::cout << "Requested path: " << path << std::endl;
+
     path = ParseFilesystemPath(std::move(path));
+    std::cout << "Requested path: " << path << std::endl;
 
     detail::ResolveStaticContent(path, fd);
 }
 
+namespace detail {
+
+bool isAllowedCharacter(char c) {
+    if (c >= 'a' && c <= 'z') {
+        return true;
+    }
+
+    if (c >= 'A' && c <= 'Z') {
+        return true;
+    }
+
+    if (c >= '0' && c <= '9') {
+        return true;
+    }
+
+    if (c == '/' || c == '.') {
+        return true;
+    }
+
+    return false;
+}
+
+bool hasInvalidCharacters(const std::string& path) {
+    for (auto c : path) {
+        if (!isAllowedCharacter(c)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::string simplifyPath(std::string path) {
+    std::vector<std::string> simplified;
+    std::string part = "";
+
+    for (auto c : path) {
+        if (c == '/') {
+            if (part.empty()) {
+                continue;
+            }
+
+            if (part == ".") {
+                continue;
+            }
+
+            if (part == "..") {
+                if (simplified.empty()) {
+                    continue;
+                }
+
+                simplified.pop_back();
+            }
+
+            simplified.push_back(std::move(part));
+        }
+    }
+
+    std::string simplified_path = "";
+    for (auto s : simplified) {
+        if (!simplified_path.empty()) {
+            simplified_path += "/" + std::move(s);
+        }
+    }
+
+    return simplified_path;
+}
+
+}; // namespace detail
+
 std::string HttpServer::ParseFilesystemPath(std::string path) {
-    return path;
+    if (path == "/") {
+        return settings.static_content_location + settings.index_page;
+    }
+
+    if (detail::hasInvalidCharacters(path)) {
+        return settings.static_content_location + settings.not_found_placeholder;
+    }
+
+    path = detail::simplifyPath(std::move(path));
+    return settings.static_content_location + path;
 }

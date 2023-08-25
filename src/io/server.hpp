@@ -10,10 +10,15 @@ struct ServerSettings {
     /* Protocol ports. std::nullopt if you want to disable specific protocol */
     std::optional<int> http_port = 80;
     std::optional<int> https_port = 443;
+
+    std::string static_content_location = "content/";
+    std::string not_found_placeholder = "404.html";
+    std::string index_page = "index.html";
 };
 
 class HttpServer {
 public:
+    void ApplySettings(ServerSettings);
     void Setup(int port);
     void CheckEvents();
     void Terminate();
@@ -39,6 +44,7 @@ private:
     int epoll;
     EpollEvent epoll_events[SOMAXCONN];
     EpollEventData epoll_data[SOMAXCONN];
+    ServerSettings settings;
 };
 
 class Server {
