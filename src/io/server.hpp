@@ -1,3 +1,5 @@
+#pragma once
+
 #include <bits/types/sig_atomic_t.h>
 #include <csignal>
 #include <optional>
@@ -5,6 +7,8 @@
 #include <string>
 #include <sys/epoll.h>
 #include <sys/socket.h>
+#include <concurrency/scheduler/executor.hpp>
+#include <concurrency/support/wait_group.hpp>
 
 struct ServerSettings {
     /* Protocol ports. std::nullopt if you want to disable specific protocol */
@@ -14,6 +18,8 @@ struct ServerSettings {
     std::string static_content_location = "content/";
     std::string not_found_placeholder = "404.html";
     std::string index_page = "index.html";
+
+    concurrency::IExecutor* executor = nullptr;
 };
 
 class HttpServer {
@@ -32,7 +38,7 @@ private:
         int fd;
     };
 
-    void ProcessEpollEvent(EpollEvent* data);
+    void ProcessEpollEvent(EpollEvent* data, concurrency::WaitGroup& wg);
     void AcceptNewConnection();
     void ReadSocket(int fd);
     void DisconnectSocket(int fd);
@@ -52,6 +58,7 @@ public:
     Server(ServerSettings);
     void Listen();
     void Terminate();
+    void SetExecutor(concurrency::IExecutor* executor);
 
 private:
     void SetupHttpListener(int port);

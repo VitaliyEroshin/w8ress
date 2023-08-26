@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <arpa/inet.h>
 #include <cstdio>
 #include <fcntl.h>
@@ -35,6 +36,11 @@ void Server::Terminate() {
     running = false;
 }
 
+void Server::SetExecutor(concurrency::IExecutor* executor) {
+    settings.executor = executor;
+    http.ApplySettings(settings);
+}
+
 void HttpServer::Terminate() {
     running = false;
 }
@@ -57,12 +63,12 @@ int MakeSocket(int port) {
     // TODO: More comfortable error handling needs to be here
     if (bind(socket, (sockaddr*)&address, sizeof(address)) < 0) {
         perror("Bind error");
-        return -1;
+        exit(1);
     }
 
     if (listen(socket, SOMAXCONN) < 0) {
         perror("Listen error");
-        return -1;
+        exit(1);
     }
 
     return socket;
@@ -215,27 +221,44 @@ void HttpServer::CheckEvents() {
 
     if (triggered < 0 && running) {
         perror("Epoll error");
+        exit(1);
     }
+
+    if (triggered < 0) {
+        triggered = 0;
+    }
+
+    concurrency::WaitGroup wg(triggered);
 
     for (ssize_t i = 0; i < triggered; ++i) {
-        ProcessEpollEvent(&events[i]);
+        ProcessEpollEvent(&events[i], wg);
     }
+    wg.Wait();
 }
 
-void HttpServer::ProcessEpollEvent(epoll_event* event) {
+void HttpServer::ProcessEpollEvent(epoll_event* event, concurrency::WaitGroup& wg) {
     EpollEventData* data = reinterpret_cast<EpollEventData*>(event->data.ptr);
 
     if ((event->events & EPOLLHUP) != 0) {
         DisconnectSocket(data->fd);
+        wg.Pass();
         return;
     }
     
     if (data->fd == socket) {
         AcceptNewConnection();
+        wg.Pass();
         return;
     }
 
-    ReadSocket(data->fd);
+    int fd = data->fd;
+
+    auto lambda = [this, fd, &wg](){
+        ReadSocket(fd);
+        wg.Pass();
+    };
+
+    settings.executor->Submit(concurrency::Task<decltype(lambda)>::MakeTask(std::move(lambda)));
     return;
 }
 
