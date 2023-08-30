@@ -15,6 +15,9 @@
 #include <string.h>
 #include <sys/stat.h>
 #include <vector>
+#include <io/cache.hpp>
+
+thread_local Cache cached_storage(1024 * 1024 * 128);
 
 Server::Server(ServerSettings settings): settings(settings) {
     if (settings.http_port) {
@@ -106,24 +109,27 @@ struct HttpResponse {
     }
 };
 
-void ExecuteScript(int client, const char* path) {
-    pid_t child_pid = fork();
+void ExecuteScript(int /*client*/, const char* /*path*/) {
+    /* Need to put error handling here before uncomment! */
 
-    if (child_pid == 0) {
-        dup2(client, 1);
-        execlp(path, path, NULL);
-        perror("execlp failed");
-        exit(1);
-    }
+    // pid_t child_pid = fork();
 
-    waitpid(child_pid, NULL, 0);
+    // if (child_pid == 0) {
+    //     dup2(client, 1);
+    //     execlp(path, path, NULL);
+    //     perror("execlp failed");
+    //     exit(1);
+    // }
+
+    // waitpid(child_pid, NULL, 0);
 }
 
-void RedirectFileContent(int client, int desc, int length) {
+void RedirectFileContent(int client, int, int length, std::string filename) {
     const int max_buffer_size = 4096;
     char buffer[max_buffer_size];
 
-    char* content = reinterpret_cast<char*>(mmap(NULL, length, PROT_READ, MAP_PRIVATE, desc, 0));
+    auto f = cached_storage.GetFileContent(std::move(filename));
+    char* content = f.content;
 
     for (int i = 0; i < length;) {
         int to_copy =
@@ -133,12 +139,14 @@ void RedirectFileContent(int client, int desc, int length) {
         i += to_copy;
     }
 
-    munmap(content, length);
+    if (f.uncached) {
+        Cache::Unmap(f);
+    }
 }
 
 void Respond(HttpResponse response, int fd) {
     std::string data = response.GetResponse();
-    std::cout << "Responding: " << data << std::endl;
+    // std::cout << "Responding: " << data << std::endl;
     write(fd, data.c_str(), data.length());
 }
 
@@ -184,8 +192,7 @@ void ResolveStaticContent(std::string path, int fd) {
     } else {
         response.content_length = length;
         Respond(std::move(response), fd);
-
-        RedirectFileContent(fd, desc, length);
+        RedirectFileContent(fd, desc, length, path);
     }
 
     close(desc);
@@ -233,6 +240,7 @@ void HttpServer::CheckEvents() {
     for (ssize_t i = 0; i < triggered; ++i) {
         ProcessEpollEvent(&events[i], wg);
     }
+
     wg.Wait();
 }
 
@@ -258,7 +266,9 @@ void HttpServer::ProcessEpollEvent(epoll_event* event, concurrency::WaitGroup& w
         wg.Pass();
     };
 
-    settings.executor->Submit(concurrency::Task<decltype(lambda)>::MakeTask(std::move(lambda)));
+    settings.executor->Submit(
+        concurrency::Task<decltype(lambda)>::MakeTask(std::move(lambda))
+    );
     return;
 }
 
@@ -300,7 +310,6 @@ void HttpServer::ReadSocket(int fd) {
 }
 
 void HttpServer::DisconnectSocket(int fd) {
-    std::cout <<  "Disconnection on " << fd << " socket" << std::endl;
     shutdown(fd, SHUT_RDWR);
     close(fd);
 }
@@ -324,10 +333,10 @@ void HttpServer::ParseHttpRequest(std::string data, int fd) {
 
     std::string proto;
     ss >> proto;
-    std::cout << "Proto: " << proto << std::endl;
+    // std::cout << "Proto: " << proto << std::endl;
 
     path = ParseFilesystemPath(std::move(path));
-    std::cout << "Requested path: " << path << std::endl;
+    // std::cout << "Requested path: " << path << std::endl;
 
     detail::ResolveStaticContent(path, fd);
 }

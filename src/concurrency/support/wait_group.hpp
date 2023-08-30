@@ -16,6 +16,7 @@ public:
 
     void Pass(uint32_t count = 1) {
         counter.fetch_sub(count);
+        counter.notify_all();
     }
 
 private:

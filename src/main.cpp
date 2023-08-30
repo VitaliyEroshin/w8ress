@@ -1,3 +1,5 @@
+#include "concurrency/scheduler/executor.hpp"
+#include "concurrency/scheduler/scheduler.hpp"
 #include "concurrency/scheduler/worker.hpp"
 #include <csignal>
 #include <cstring>
