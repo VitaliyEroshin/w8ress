@@ -27,7 +27,6 @@ public:
 class InlineExecutor : public IExecutor {
 public:
     bool Submit(ITask* task) override {
-        std::cout << "Submitted task!" << std::endl;
         (*task)();
         return true;
     }

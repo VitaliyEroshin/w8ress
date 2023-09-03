@@ -1,5 +1,7 @@
 FROM ubuntu:jammy
 
+EXPOSE 80
+
 # Install CMake & deps
 RUN apt-get update && apt-get -y install \
     cmake protobuf-compiler \
@@ -11,3 +13,5 @@ COPY . /home
 
 # Build the project
 RUN ./scripts/build.sh
+
+CMD ["./build/w8ress"]

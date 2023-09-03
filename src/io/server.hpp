@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <concurrency/scheduler/executor.hpp>
 #include <concurrency/support/wait_group.hpp>
+#include <io/logic.hpp>
 
 struct ServerSettings {
     /* Protocol ports. std::nullopt if you want to disable specific protocol */
@@ -20,6 +21,8 @@ struct ServerSettings {
     std::string index_page = "index.html";
 
     concurrency::IExecutor* executor = nullptr;
+
+    Logic* logic = nullptr;
 };
 
 class HttpServer {
@@ -59,6 +62,8 @@ public:
     void Listen();
     void Terminate();
     void SetExecutor(concurrency::IExecutor* executor);
+
+    void ApplySettings(ServerSettings);
 
 private:
     void SetupHttpListener(int port);

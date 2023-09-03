@@ -44,6 +44,11 @@ void Server::SetExecutor(concurrency::IExecutor* executor) {
     http.ApplySettings(settings);
 }
 
+void Server::ApplySettings(ServerSettings s) {
+    settings = s;
+    http.ApplySettings(s);
+}
+
 void HttpServer::Terminate() {
     running = false;
 }
@@ -124,30 +129,169 @@ void ExecuteScript(int /*client*/, const char* /*path*/) {
     // waitpid(child_pid, NULL, 0);
 }
 
-void RedirectFileContent(int client, int, int length, std::string filename) {
+void RedirectFileContent(int fd, const char* content, int length) {
+    // Avoid copying here
     const int max_buffer_size = 4096;
     char buffer[max_buffer_size];
-
-    auto f = cached_storage.GetFileContent(std::move(filename));
-    char* content = f.content;
 
     for (int i = 0; i < length;) {
         int to_copy =
             (length - i < max_buffer_size ? length - i : max_buffer_size);
         memcpy(buffer, content + i, to_copy);
-        write(client, buffer, to_copy);
+        write(fd, buffer, to_copy);
         i += to_copy;
-    }
-
-    if (f.uncached) {
-        Cache::Unmap(f);
     }
 }
 
 void Respond(HttpResponse response, int fd) {
     std::string data = response.GetResponse();
-    // std::cout << "Responding: " << data << std::endl;
     write(fd, data.c_str(), data.length());
+}
+
+std::string ResolveMimeType(std::string path) {
+    if (path.empty()) {
+        return "application/octet-stream";
+    }
+
+    std::string type;
+    auto it = --path.end();
+    while (it != path.begin() && *it != '.') {
+        type.push_back(*it);
+        --it;
+    }
+    std::reverse(type.begin(), type.end());
+
+    if (type == "html") {
+        return "text/html";
+    }
+
+    if (type == "css") {
+        return "text/css";
+    }
+
+    if (type == "wasm") {
+        return "application/wasm";
+    }
+
+    if (type == "js") {
+        return "text/javascript";
+    }
+
+    if (type == "ts") {
+        return "application/x-typescript";
+    }
+
+    if (type == "png" || type == "jpeg" || type == "gif") {
+        return "image/" + type;
+    }
+    
+    return "";
+}
+
+std::optional<Cache::File> ReadFile(std::string path, Cache& cache) {
+    int desc = open(path.c_str(), O_RDONLY);
+
+    if (desc < 0) {
+        return std::nullopt;
+    }
+
+    struct stat file_stat;
+    fstat(desc, &file_stat);
+
+    if (!S_ISREG(file_stat.st_mode)) {
+        return std::nullopt;
+    }
+    
+
+    return cache.GetFileContent(std::move(path));
+}
+
+std::string SubstituteTemplate(Cache::File f, std::vector<std::string> args) {
+    // Very unsafe, temporary solution
+
+    int balance = 0;
+    bool is_arg = false;
+    std::string argname;
+    std::string result;
+
+    auto it = args.begin();
+
+    for (size_t i = 0; i < f.length; ++i) {
+        if (f.content[i] == '{') {
+            result.push_back('{');
+            if (balance < 0) {
+                balance = 0;
+            }
+
+            ++balance;
+            if (balance == 3) {
+                result.pop_back();
+                result.pop_back();
+                result.pop_back();
+                is_arg = true;
+            }
+
+            continue;
+        }
+
+        if (f.content[i] == '}') {
+            result.push_back('}');
+            if (balance > 0) {
+                balance = 0;
+            }
+
+            --balance;
+            if (balance != -3) {
+                continue;
+            }
+
+            result.pop_back();
+            result.pop_back();
+            result.pop_back();
+
+            is_arg = false;
+            argname.clear(); // TODO: Get arg from the map by name
+            result += *it;
+            ++it;
+
+            continue;
+        }
+        balance = 0;
+
+        if (is_arg) {
+            argname.push_back(f.content[i]);
+            continue;
+        }
+
+        if (!is_arg) {
+            result.push_back(f.content[i]);
+            continue;
+        }
+    }
+    return result;
+}
+
+void RespondNotFound(int fd) {
+    HttpResponse response;
+    response.proto = "HTTP/1.1";
+
+    response.status_code = 404;
+    response.reason_phrase = "Not Found";
+    response.content_length = 0;
+
+    Respond(std::move(response), fd);
+}
+
+void RespondOk(int fd, int content_length, std::string mime_type = "text/plain") {
+    HttpResponse response;
+    response.proto = "HTTP/1.1";
+
+    response.status_code = 200;
+    response.reason_phrase = "OK";
+    response.content_length = content_length;
+    response.content_type = mime_type;
+
+    Respond(std::move(response), fd);
 }
 
 void ResolveStaticContent(std::string path, int fd) {
@@ -192,7 +336,7 @@ void ResolveStaticContent(std::string path, int fd) {
     } else {
         response.content_length = length;
         Respond(std::move(response), fd);
-        RedirectFileContent(fd, desc, length, path);
+        // RedirectFileContent(fd, desc, length, path);
     }
 
     close(desc);
@@ -333,12 +477,34 @@ void HttpServer::ParseHttpRequest(std::string data, int fd) {
 
     std::string proto;
     ss >> proto;
-    // std::cout << "Proto: " << proto << std::endl;
 
-    path = ParseFilesystemPath(std::move(path));
-    // std::cout << "Requested path: " << path << std::endl;
+    auto response = settings.logic->Get(path);
+    response.result = ParseFilesystemPath(std::move(response.result));
+    std::string mime_type = detail::ResolveMimeType(response.result);
+    
+    if (response.type == Logic::Response::HtmlTemplate || response.type == Logic::Response::File) {
+        auto f = detail::ReadFile(response.result, cached_storage);
 
-    detail::ResolveStaticContent(path, fd);
+        // Handle std::optional here
+        if (!f.has_value()) {
+            detail::RespondNotFound(fd);
+            return;
+        }
+
+        if (response.type == Logic::Response::File) {
+            detail::RespondOk(fd, f->length, mime_type);
+            detail::RedirectFileContent(fd, f->content, f->length);
+            return;
+        }
+
+        auto content = detail::SubstituteTemplate(std::move(*f), std::move(response.args));
+
+        detail::RespondOk(fd, content.length(), mime_type);
+        detail::RedirectFileContent(fd, content.c_str(), content.length());
+        return;
+    }
+
+    detail::RespondNotFound(fd);
 }
 
 namespace detail {
@@ -356,7 +522,7 @@ bool isAllowedCharacter(char c) {
         return true;
     }
 
-    if (c == '/' || c == '.') {
+    if (c == '/' || c == '.' || c == '-' || c == '_') {
         return true;
     }
 
@@ -396,14 +562,21 @@ std::string simplifyPath(std::string path) {
             }
 
             simplified.push_back(std::move(part));
+            continue;
         }
+
+        part.push_back(c);
+    }
+    if (!part.empty()) {
+        simplified.push_back(std::move(part));
     }
 
     std::string simplified_path = "";
     for (auto s : simplified) {
         if (!simplified_path.empty()) {
-            simplified_path += "/" + std::move(s);
+            simplified_path += "/";
         }
+        simplified_path += std::move(s);
     }
 
     return simplified_path;
@@ -412,10 +585,6 @@ std::string simplifyPath(std::string path) {
 }; // namespace detail
 
 std::string HttpServer::ParseFilesystemPath(std::string path) {
-    if (path == "/") {
-        return settings.static_content_location + settings.index_page;
-    }
-
     if (detail::hasInvalidCharacters(path)) {
         return settings.static_content_location + settings.not_found_placeholder;
     }

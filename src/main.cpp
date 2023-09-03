@@ -6,8 +6,7 @@
 #include <io/server.hpp>
 #include <signal.h>
 #include <iostream>
-
-concurrency::IExecutor* executor;
+#include <io/pspss_logic.hpp>
 
 ServerSettings settings;
 Server server(settings);
@@ -18,7 +17,7 @@ public:
         std::cout << "\nSIGTERM received... Bye ^-^" << std::endl;
         server.Terminate();
         std::cout << "Server terminated!" << std::endl;
-        executor->Stop();
+        settings.executor->Stop();
         std::cout << "Executor stopped!" << std::endl;
     }
 
@@ -40,13 +39,16 @@ private:
 };
 
 int main() {
-    executor = new concurrency::Scheduler();
+    concurrency::InlineExecutor scheduler;
+    PspssLogic logic;
+
+    settings.logic = &logic;
+    settings.executor = &scheduler;
+
+    server.ApplySettings(settings);
 
     SignalHandler signal_handler;
     signal_handler.SetupSignals();
 
-    server.SetExecutor(executor);
     server.Listen();
-
-    // delete executor;
 }

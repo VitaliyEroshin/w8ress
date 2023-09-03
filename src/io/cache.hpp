@@ -10,23 +10,47 @@
 #include <unordered_map>
 
 class Cache {
+public:
     struct File {
         std::string filename;
         size_t length;
         char* content;
         bool uncached;
+
+        ~File() {
+            if (!filename.empty() && uncached) {
+                Unmap(std::move(*this));
+            }
+        }
+
+        File(std::string filename, size_t length, char *content)
+            : filename(std::move(filename)),
+              length(length),
+              content(content),
+              uncached(false) {}
+        
+        void MakeUncached() {
+            uncached = true;
+        }
+
+        File Clone() {
+            return {filename, length, content};
+        }
+
+        File(File&&) noexcept = default;
+        File& operator=(File&&) noexcept = default;
+
+        File(const File& other) = delete;
+        File& operator=(const File& other) = delete;
     };
-public:
+
     Cache(size_t cache_size) : cache_size(cache_size) {}
 
     File GetFileContent(std::string file) {
-        // std::cout << "Asked cache about " << file << std::endl;
         auto it = cached.find(file);
         if (it == cached.end()) {
-            // std::cout << "Have not found in the cache, adding" << std::endl;
             return AddToCache(std::move(file));
         } else {
-            // std::cout << "Found in the cache, touching and returning" << std::endl;
             return Touch(it, it->second);
         }
     }
@@ -41,20 +65,18 @@ private:
     std::unordered_map<std::string, std::list<File>::iterator> cached;
     std::list<File> list;
 
-    File AddToCache(std::string file) {
-        int desc = open(file.c_str(), O_RDONLY);
+    File AddToCache(std::string filename) {
+        int desc = open(filename.c_str(), O_RDONLY);
         struct stat file_stat;
 
         fstat(desc, &file_stat);
         size_t length = file_stat.st_size;
 
-        File f;
-        f.filename = file;
-        f.length = length;
-        f.content = reinterpret_cast<char*>(mmap(NULL, length, PROT_READ, MAP_PRIVATE, desc, 0));
-        f.uncached = length > cache_size;
+        char* content = reinterpret_cast<char*>(mmap(NULL, length, PROT_READ, MAP_PRIVATE, desc, 0));
+        File f(filename, length, content);
 
         if (length > cache_size) {
+            f.MakeUncached();
             return f;
         }
 
@@ -62,17 +84,17 @@ private:
             Remove();
         }
 
-        list.push_back(f);
+        list.push_back(f.Clone());
         auto it = --list.end();
-        cached.insert({file, it});
+        cached.insert({filename, it});
         total_size += length;
         return f;
     }
 
     File Touch(decltype(cached)::iterator cached_it, std::list<File>::iterator it) {
-        File f = *it;
+        File f = std::move(*it);
         list.erase(it);
-        list.push_back(f);
+        list.push_back(f.Clone());
         cached_it->second = --list.end();
         return f;
     }
@@ -81,10 +103,10 @@ private:
         auto f = std::move(list.front());
         list.pop_front();
 
-        auto it = cached.find(std::move(f.filename));
+        auto it = cached.find(f.filename);
         cached.erase(it);
 
         total_size -= f.length;
-        Unmap(std::move(f));
+        f.MakeUncached();
     }
 };
