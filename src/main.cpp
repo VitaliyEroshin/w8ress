@@ -6,7 +6,7 @@
 #include <io/server.hpp>
 #include <signal.h>
 #include <iostream>
-#include <io/pspss_logic.hpp>
+#include <io/logic.hpp>
 
 ServerSettings settings;
 Server server(settings);
@@ -40,7 +40,7 @@ private:
 
 int main() {
     concurrency::InlineExecutor scheduler;
-    PspssLogic logic;
+    Logic logic;
 
     settings.logic = &logic;
     settings.executor = &scheduler;
